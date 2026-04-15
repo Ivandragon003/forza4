@@ -42,6 +42,9 @@ int ricevi_messaggio(int socket, char* buffer) {
         char c;
         int bytes = recv(socket, &c, 1, 0);
         if (bytes < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
             return -1;
         }
         if (bytes == 0) {

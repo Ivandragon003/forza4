@@ -65,6 +65,8 @@ static const char* MSG_TURNO =
     "E il tuo turno! Scegli una colonna (0-6).\n";
 static const char* MSG_ATTESA_TURNO =
     "Aspetta il tuo turno...\n";
+static const char* MSG_NON_SEI_CREATORE =
+    "Non sei il creatore di questa partita.\n";
 
 typedef struct {
     int id_partita;
@@ -83,6 +85,8 @@ typedef struct {
     int escludi1;
     int escludi2;
 } BroadcastPartitaTerminata;
+
+static int invia_con_fallback(int socket, const char* messaggio, int* socket_ko);
 
 static void accoda_notifica_disconnessione(NotificaDisconnessione* notifiche,
                                            int* count,
@@ -128,6 +132,68 @@ static void broadcast_partita_conclusa(int id_partita, int escludi1, int escludi
     notifica_altri_client(escludi1, escludi2, notifica_fine);
 }
 
+static void invia_formato_non_valido(int socket, const char* comando) {
+    char msg[120];
+    snprintf(msg, sizeof(msg), "Formato comando non valido. Usa: %s <id_partita>\n", comando);
+    invia_messaggio(socket, msg);
+}
+
+static int parse_id_comando_o_errore(int socket,
+                                     const char* buffer,
+                                     const char* prefisso,
+                                     const char* comando,
+                                     int* out_id) {
+    if (parse_id_comando(buffer, prefisso, out_id) != 0) {
+        invia_formato_non_valido(socket, comando);
+        return -1;
+    }
+    return 0;
+}
+
+static void invia_griglia_con_fallback(int socket1, int socket2, const char* griglia, int* socket_ko) {
+    if (socket1 > 0) {
+        invia_con_fallback(socket1, "\n", socket_ko);
+        invia_con_fallback(socket1, griglia, socket_ko);
+    }
+    if (socket2 > 0) {
+        invia_con_fallback(socket2, "\n", socket_ko);
+        invia_con_fallback(socket2, griglia, socket_ko);
+    }
+}
+
+static void notifica_vittoria_tavolino(int socket_avversario) {
+    if (socket_avversario <= 0) {
+        return;
+    }
+    invia_messaggio(socket_avversario, MSG_VITTORIA_TAVOLINO);
+    invia_messaggio(socket_avversario, MSG_MENU_NUOVA_PARTITA);
+    aggiorna_id_partita_client_per_socket(socket_avversario, 0);
+}
+
+static void invia_esito_finale_partita(int id_partita,
+                                       int socket_me,
+                                       int socket_opp,
+                                       const char* griglia,
+                                       const char* messaggio_me,
+                                       const char* messaggio_opp) {
+    if (socket_me > 0) {
+        invia_messaggio(socket_me, "\n");
+        invia_messaggio(socket_me, griglia);
+        invia_messaggio(socket_me, messaggio_me);
+        invia_messaggio(socket_me, MSG_MENU_NUOVA_PARTITA);
+    }
+
+    if (socket_opp > 0) {
+        invia_messaggio(socket_opp, "\n");
+        invia_messaggio(socket_opp, griglia);
+        invia_messaggio(socket_opp, messaggio_opp);
+        invia_messaggio(socket_opp, MSG_MENU_NUOVA_PARTITA);
+        aggiorna_id_partita_client_per_socket(socket_opp, 0);
+    }
+
+    broadcast_partita_conclusa(id_partita, socket_me, socket_opp);
+}
+
 static int termina_partita_per_socket_non_raggiungibile(Partita* partita, int socket_non_raggiungibile) {
     if (partita == NULL || partita->stato != PARTITA_IN_CORSO) {
         return -1;
@@ -156,16 +222,6 @@ static int invia_con_fallback(int socket, const char* messaggio, int* socket_ko)
         return -1;
     }
     return 0;
-}
-
-static void invia_griglia_a_entrambi_con_fallback(Partita* partita, int* socket_ko) {
-    char griglia[500];
-    griglia_a_stringa(partita->griglia, griglia, sizeof(griglia));
-
-    invia_con_fallback(partita->socket_giocatore1, "\n", socket_ko);
-    invia_con_fallback(partita->socket_giocatore1, griglia, socket_ko);
-    invia_con_fallback(partita->socket_giocatore2, "\n", socket_ko);
-    invia_con_fallback(partita->socket_giocatore2, griglia, socket_ko);
 }
 
 static void* gestisci_timeout_richiesta(void* arg) {
@@ -272,9 +328,8 @@ static int gestisci_comando_entra(DatiClient* client, const char* buffer) {
     }
 
     int id_partita = 0;
-    if (parse_id_comando(buffer, "ENTRA ", &id_partita) != 0) {
+    if (parse_id_comando_o_errore(client->socket, buffer, "ENTRA ", "ENTRA", &id_partita) != 0) {
         sblocca_partite();
-        invia_messaggio(client->socket, "Formato comando non valido. Usa: ENTRA <id_partita>\n");
         return 0;
     }
     int risultato = richiedi_partita(id_partita, client->socket, client->nome);
@@ -306,6 +361,7 @@ static int gestisci_comando_entra(DatiClient* client, const char* buffer) {
             invia_messaggio(socket_creatore, notifica);
         }
 
+        int timeout_avviato = 0;
         TimeoutRichiestaArgs* timeout_args = malloc(sizeof(TimeoutRichiestaArgs));
         if (timeout_args != NULL) {
             timeout_args->id_partita = id_partita;
@@ -313,27 +369,60 @@ static int gestisci_comando_entra(DatiClient* client, const char* buffer) {
             pthread_t timeout_thread;
             if (pthread_create(&timeout_thread, NULL, gestisci_timeout_richiesta, timeout_args) == 0) {
                 pthread_detach(timeout_thread);
+                timeout_avviato = 1;
             } else {
                 free(timeout_args);
             }
         }
 
-    } else if (risultato == -1) {
-        invia_messaggio(client->socket, "Partita non trovata.\n");
-    } else if (risultato == -2) {
-        invia_messaggio(client->socket, "Partita non disponibile.\n");
-    } else if (risultato == -4) {
-        invia_messaggio(client->socket, "Non puoi entrare nella tua stessa partita.\n");
+        if (!timeout_avviato) {
+            int annullata = 0;
+            blocca_partite();
+            Partita* partita = trova_partita(id_partita);
+            if (partita != NULL &&
+                partita->stato == PARTITA_RICHIESTA_PENDENTE &&
+                partita->socket_richiedente == client->socket) {
+                partita->socket_richiedente = -1;
+                partita->nome_richiedente[0] = '\0';
+                partita->stato = PARTITA_IN_ATTESA;
+                atomic_store(&partita->timeout_annullato, 1);
+                annullata = 1;
+            }
+            sblocca_partite();
+
+            if (annullata) {
+                aggiorna_id_partita_client_per_socket(client->socket, 0);
+                invia_messaggio(client->socket,
+                                "Errore interno: timeout non disponibile. Richiesta annullata.\n");
+                if (socket_creatore > 0) {
+                    invia_messaggio(socket_creatore,
+                                    "Richiesta annullata automaticamente per errore interno.\n");
+                }
+            }
+        }
+
     } else {
-        invia_messaggio(client->socket, "Partita gia' piena.\n");
+        switch (risultato) {
+            case -1:
+                invia_messaggio(client->socket, "Partita non trovata.\n");
+                break;
+            case -2:
+                invia_messaggio(client->socket, "Partita non disponibile.\n");
+                break;
+            case -4:
+                invia_messaggio(client->socket, "Non puoi entrare nella tua stessa partita.\n");
+                break;
+            default:
+                invia_messaggio(client->socket, "Partita gia' piena.\n");
+                break;
+        }
     }
     return 0;
 }
 
 static int gestisci_comando_accetta(DatiClient* client, const char* buffer) {
     int id_partita = 0;
-    if (parse_id_comando(buffer, "ACCETTA ", &id_partita) != 0) {
-        invia_messaggio(client->socket, "Formato comando non valido. Usa: ACCETTA <id_partita>\n");
+    if (parse_id_comando_o_errore(client->socket, buffer, "ACCETTA ", "ACCETTA", &id_partita) != 0) {
         return 0;
     }
     blocca_partite();
@@ -353,42 +442,48 @@ static int gestisci_comando_accetta(DatiClient* client, const char* buffer) {
 
     if (partita && partita->socket_giocatore1 == client->socket) {
         if (accetta_richiesta(id_partita) == 0) {
-            char msg1[200], msg2[200];
-            int socket_ko = -1;
-            snprintf(msg1, sizeof(msg1), "Hai accettato %s. Partita iniziata!\n", partita->nome_giocatore2);
-            snprintf(msg2, sizeof(msg2), "La tua richiesta e' stata accettata! Partita iniziata!\n");
-
-            invia_con_fallback(partita->socket_giocatore1, msg1, &socket_ko);
-            invia_con_fallback(partita->socket_giocatore2, msg2, &socket_ko);
-
-            snprintf(msg1, sizeof(msg1), "Giochi contro %s. Sei il giocatore ROSSO (R).\n", partita->nome_giocatore2);
-            snprintf(msg2, sizeof(msg2), "Giochi contro %s. Sei il giocatore GIALLO (G).\n", partita->nome_giocatore1);
-
-            invia_con_fallback(partita->socket_giocatore1, msg1, &socket_ko);
-            invia_con_fallback(partita->socket_giocatore2, msg2, &socket_ko);
-            invia_con_fallback(partita->socket_giocatore1, MSG_TURNO, &socket_ko);
-            invia_con_fallback(partita->socket_giocatore2, MSG_ATTESA_TURNO, &socket_ko);
-            invia_griglia_a_entrambi_con_fallback(partita, &socket_ko);
-
-            if (socket_ko > 0) {
-                int socket_avversario = termina_partita_per_socket_non_raggiungibile(partita, socket_ko);
-                atomic_store(&client->id_partita_corrente, 0);
-                sblocca_partite();
-                if (socket_avversario > 0) {
-                    invia_messaggio(socket_avversario,
-                                    MSG_VITTORIA_TAVOLINO);
-                    invia_messaggio(socket_avversario, MSG_MENU_NUOVA_PARTITA);
-                    aggiorna_id_partita_client_per_socket(socket_avversario, 0);
-                }
-                return 0;
-            }
-            atomic_store(&client->id_partita_corrente, id_partita);
-            char nome_g1[50], nome_g2[50];
-            snprintf(nome_g1, sizeof(nome_g1), "%s", partita->nome_giocatore1);
-            snprintf(nome_g2, sizeof(nome_g2), "%s", partita->nome_giocatore2);
             int sock_g1 = partita->socket_giocatore1;
             int sock_g2 = partita->socket_giocatore2;
+            char nome_g1[50], nome_g2[50];
+            char griglia[500];
+            snprintf(nome_g1, sizeof(nome_g1), "%s", partita->nome_giocatore1);
+            snprintf(nome_g2, sizeof(nome_g2), "%s", partita->nome_giocatore2);
+            griglia_a_stringa(partita->griglia, griglia, sizeof(griglia));
+            atomic_store(&client->id_partita_corrente, id_partita);
             sblocca_partite();
+
+            char msg1[200], msg2[200];
+            int socket_ko = -1;
+            snprintf(msg1, sizeof(msg1), "Hai accettato %s. Partita iniziata!\n", nome_g2);
+            snprintf(msg2, sizeof(msg2), "La tua richiesta e' stata accettata! Partita iniziata!\n");
+
+            invia_con_fallback(sock_g1, msg1, &socket_ko);
+            invia_con_fallback(sock_g2, msg2, &socket_ko);
+
+            snprintf(msg1, sizeof(msg1), "Giochi contro %s. Sei il giocatore ROSSO (R).\n", nome_g2);
+            snprintf(msg2, sizeof(msg2), "Giochi contro %s. Sei il giocatore GIALLO (G).\n", nome_g1);
+
+            invia_con_fallback(sock_g1, msg1, &socket_ko);
+            invia_con_fallback(sock_g2, msg2, &socket_ko);
+            invia_con_fallback(sock_g1, MSG_TURNO, &socket_ko);
+            invia_con_fallback(sock_g2, MSG_ATTESA_TURNO, &socket_ko);
+            invia_griglia_con_fallback(sock_g1, sock_g2, griglia, &socket_ko);
+
+            if (socket_ko > 0) {
+                int socket_avversario = -1;
+                blocca_partite();
+                Partita* partita_ko = trova_partita(id_partita);
+                if (partita_ko != NULL && partita_ko->stato == PARTITA_IN_CORSO) {
+                    socket_avversario = termina_partita_per_socket_non_raggiungibile(partita_ko, socket_ko);
+                }
+                if (socket_ko == client->socket) {
+                    atomic_store(&client->id_partita_corrente, 0);
+                }
+                sblocca_partite();
+                notifica_vittoria_tavolino(socket_avversario);
+                broadcast_partita_conclusa(id_partita, socket_ko, socket_avversario);
+                return 0;
+            }
 
             char notifica_broadcast[200];
             snprintf(notifica_broadcast, sizeof(notifica_broadcast),
@@ -396,22 +491,20 @@ static int gestisci_comando_accetta(DatiClient* client, const char* buffer) {
                      id_partita, nome_g1, nome_g2);
             notifica_altri_client(sock_g1, sock_g2, notifica_broadcast);
             return 0;
-        } else {
-            sblocca_partite();
-            invia_messaggio(client->socket, "Errore nell'accettazione.\n");
-            return 0;
         }
+        sblocca_partite();
+        invia_messaggio(client->socket, "Errore nell'accettazione.\n");
+        return 0;
     } else {
         sblocca_partite();
-        invia_messaggio(client->socket, "Non sei il creatore di questa partita.\n");
+        invia_messaggio(client->socket, MSG_NON_SEI_CREATORE);
         return 0;
     }
 }
 
 static int gestisci_comando_rifiuta(DatiClient* client, const char* buffer) {
     int id_partita = 0;
-    if (parse_id_comando(buffer, "RIFIUTA ", &id_partita) != 0) {
-        invia_messaggio(client->socket, "Formato comando non valido. Usa: RIFIUTA <id_partita>\n");
+    if (parse_id_comando_o_errore(client->socket, buffer, "RIFIUTA ", "RIFIUTA", &id_partita) != 0) {
         return 0;
     }
     blocca_partite();
@@ -432,7 +525,7 @@ static int gestisci_comando_rifiuta(DatiClient* client, const char* buffer) {
         }
     } else {
         sblocca_partite();
-        invia_messaggio(client->socket, "Non sei il creatore di questa partita.\n");
+        invia_messaggio(client->socket, MSG_NON_SEI_CREATORE);
     }
     return 0;
 }
@@ -459,10 +552,7 @@ static int gestisci_comando_abbandona(DatiClient* client) {
         }
         invia_messaggio(client->socket,
                         "Sei uscito dalla partita. Puoi creare o unirti a una nuova partita.\n");
-        char notifica_fine[100];
-        snprintf(notifica_fine, sizeof(notifica_fine),
-                 "NOTIFICA: La partita ID %d si e' conclusa.\n", id_abbandonata);
-        notifica_altri_client(client->socket, avversario, notifica_fine);
+        broadcast_partita_conclusa(id_abbandonata, client->socket, avversario);
     } else {
         sblocca_partite();
         invia_messaggio(client->socket,
@@ -538,38 +628,22 @@ static int gestisci_mossa_gioco(DatiClient* client, const char* buffer) {
     sblocca_partite();
 
     if (stato_post == 1) {
-        invia_messaggio(socket_me, "\n");
-        invia_messaggio(socket_me, griglia);
-        if (socket_opp > 0) {
-            invia_messaggio(socket_opp, "\n");
-            invia_messaggio(socket_opp, griglia);
-        }
-        invia_messaggio(socket_me, "HAI VINTO! Congratulazioni!\n");
-        if (socket_opp > 0) {
-            invia_messaggio(socket_opp, "Hai perso. Riprova!\n");
-            invia_messaggio(socket_opp, MSG_MENU_NUOVA_PARTITA);
-            aggiorna_id_partita_client_per_socket(socket_opp, 0);
-        }
-        invia_messaggio(socket_me, MSG_MENU_NUOVA_PARTITA);
-        broadcast_partita_conclusa(id_partita, socket_me, socket_opp);
+        invia_esito_finale_partita(id_partita,
+                                   socket_me,
+                                   socket_opp,
+                                   griglia,
+                                   "HAI VINTO! Congratulazioni!\n",
+                                   "Hai perso. Riprova!\n");
         return 0;
     }
 
     if (stato_post == 2) {
-        invia_messaggio(socket_me, "\n");
-        invia_messaggio(socket_me, griglia);
-        if (socket_opp > 0) {
-            invia_messaggio(socket_opp, "\n");
-            invia_messaggio(socket_opp, griglia);
-        }
-        invia_messaggio(socket_me, "PAREGGIO!\n");
-        if (socket_opp > 0) {
-            invia_messaggio(socket_opp, "PAREGGIO!\n");
-            invia_messaggio(socket_opp, MSG_MENU_NUOVA_PARTITA);
-            aggiorna_id_partita_client_per_socket(socket_opp, 0);
-        }
-        invia_messaggio(socket_me, MSG_MENU_NUOVA_PARTITA);
-        broadcast_partita_conclusa(id_partita, socket_me, socket_opp);
+        invia_esito_finale_partita(id_partita,
+                                   socket_me,
+                                   socket_opp,
+                                   griglia,
+                                   "PAREGGIO!\n",
+                                   "PAREGGIO!\n");
         return 0;
     }
 
@@ -580,14 +654,7 @@ static int gestisci_mossa_gioco(DatiClient* client, const char* buffer) {
     if (socket_attesa > 0) {
         invia_con_fallback(socket_attesa, MSG_ATTESA_TURNO, &socket_ko);
     }
-    if (socket_me > 0) {
-        invia_con_fallback(socket_me, "\n", &socket_ko);
-        invia_con_fallback(socket_me, griglia, &socket_ko);
-    }
-    if (socket_opp > 0) {
-        invia_con_fallback(socket_opp, "\n", &socket_ko);
-        invia_con_fallback(socket_opp, griglia, &socket_ko);
-    }
+    invia_griglia_con_fallback(socket_me, socket_opp, griglia, &socket_ko);
 
     if (socket_ko > 0) {
         int socket_avversario = -1;
@@ -599,12 +666,7 @@ static int gestisci_mossa_gioco(DatiClient* client, const char* buffer) {
         atomic_store(&client->id_partita_corrente, 0);
         sblocca_partite();
 
-        if (socket_avversario > 0) {
-            invia_messaggio(socket_avversario,
-                            MSG_VITTORIA_TAVOLINO);
-            invia_messaggio(socket_avversario, MSG_MENU_NUOVA_PARTITA);
-            aggiorna_id_partita_client_per_socket(socket_avversario, 0);
-        }
+        notifica_vittoria_tavolino(socket_avversario);
         broadcast_partita_conclusa(id_partita, socket_ko, socket_avversario);
     }
 

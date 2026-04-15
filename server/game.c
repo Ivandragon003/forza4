@@ -185,7 +185,7 @@ int crea_partita(int socket_giocatore, char* nome_giocatore) {
     partita->turno_corrente = 1;
     partita->stato = PARTITA_IN_ATTESA;
     partita->vincitore = 0;
-    atomic_init(&partita->timeout_annullato, 0);
+    atomic_store(&partita->timeout_annullato, 0);
 
     return partita->id_partita;
 }
