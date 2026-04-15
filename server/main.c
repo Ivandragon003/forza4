@@ -15,6 +15,67 @@
 #include "network.h"
 #include "session.h"
 
+static int imposta_opzione_socket(int socket_fd,
+                                  int level,
+                                  int optname,
+                                  const void* value,
+                                  socklen_t value_len,
+                                  const char* errore) {
+    if (setsockopt(socket_fd, level, optname, value, value_len) < 0) {
+        perror(errore);
+        return -1;
+    }
+    return 0;
+}
+
+static void configura_socket_client(int socket_client) {
+    int keepalive = 1;
+    (void)imposta_opzione_socket(socket_client, SOL_SOCKET, SO_KEEPALIVE,
+                                 &keepalive, sizeof(keepalive),
+                                 "Errore setsockopt SO_KEEPALIVE");
+
+#ifdef TCP_KEEPIDLE
+    {
+        int keepidle = 10;
+        (void)imposta_opzione_socket(socket_client, IPPROTO_TCP, TCP_KEEPIDLE,
+                                     &keepidle, sizeof(keepidle),
+                                     "Errore setsockopt TCP_KEEPIDLE");
+    }
+#endif
+#ifdef TCP_KEEPINTVL
+    {
+        int keepintvl = 5;
+        (void)imposta_opzione_socket(socket_client, IPPROTO_TCP, TCP_KEEPINTVL,
+                                     &keepintvl, sizeof(keepintvl),
+                                     "Errore setsockopt TCP_KEEPINTVL");
+    }
+#endif
+#ifdef TCP_KEEPCNT
+    {
+        int keepcnt = 2;
+        (void)imposta_opzione_socket(socket_client, IPPROTO_TCP, TCP_KEEPCNT,
+                                     &keepcnt, sizeof(keepcnt),
+                                     "Errore setsockopt TCP_KEEPCNT");
+    }
+#endif
+#ifdef TCP_USER_TIMEOUT
+    {
+        int timeout_ms = 15000;
+        (void)imposta_opzione_socket(socket_client, IPPROTO_TCP, TCP_USER_TIMEOUT,
+                                     &timeout_ms, sizeof(timeout_ms),
+                                     "Errore setsockopt TCP_USER_TIMEOUT");
+    }
+#endif
+    {
+        struct timeval tv;
+        tv.tv_sec = 15;
+        tv.tv_usec = 0;
+        (void)imposta_opzione_socket(socket_client, SOL_SOCKET, SO_RCVTIMEO,
+                                     &tv, sizeof(tv),
+                                     "Errore setsockopt SO_RCVTIMEO");
+    }
+}
+
 int main() {
     int server_fd;  //fd sarebbe file descriptor. in unix tutto è un file;
     struct sockaddr_in indirizzo;
@@ -50,10 +111,11 @@ struct sockaddr_in {
 Stampa: "Errore socket: Address already in use"*/
 
     int opt = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    if (imposta_opzione_socket(server_fd, SOL_SOCKET, SO_REUSEADDR,
+                               &opt, sizeof(opt),
+                               "Errore setsockopt SO_REUSEADDR") < 0) {
 // senza SO_REUSEADDR, se il server crasha e si riavvia immediatamente, il so tiene la porta occupata per qualche minuto.
 // con SO_REUSEADDR, il server può subito riusare la porta senza aspettare. scelta quasi OBBLIGATORIA
-        perror("Errore setsockopt");
         exit(EXIT_FAILURE);
     }
 //struttura del nostro indirizzo di tipo sockaddr_in:
@@ -100,54 +162,7 @@ htons = Host TO Network Short (16 bit). Converte un numero a 16 bit dall'ordine 
             continue;
         }
 
-        int keepalive = 1;
-        if (setsockopt(dati_client->socket, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive)) < 0) {
-            perror("Errore setsockopt SO_KEEPALIVE");
-        }
-
-#ifdef TCP_KEEPIDLE // dopo quanti secondi di inattività iniziare i controlli
-        {
-            int keepidle = 10;
-            if (setsockopt(dati_client->socket, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle)) < 0) {
-                perror("Errore setsockopt TCP_KEEPIDLE");
-            }
-        }
-#endif
-#ifdef TCP_KEEPINTVL // ogni quanto riprovare a controllare dopo il primo tentativo
-        {
-            int keepintvl = 5;
-            if (setsockopt(dati_client->socket, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl)) < 0) {
-                perror("Errore setsockopt TCP_KEEPINTVL");
-            }
-        }
-#endif
-#ifdef TCP_KEEPCNT // quante volte riprovo prima di dire “client morto”
-        {
-            int keepcnt = 2;
-            if (setsockopt(dati_client->socket, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt)) < 0) {
-                perror("Errore setsockopt TCP_KEEPCNT");
-            }
-        }
-#endif
-#ifdef TCP_USER_TIMEOUT // massimo tempo per ricevere ACK o risposta TCP prima di considerare la connessione morta
-        {
-            int timeout_ms = 15000;
-            if (setsockopt(dati_client->socket, IPPROTO_TCP, TCP_USER_TIMEOUT,
-                           &timeout_ms, sizeof(timeout_ms)) < 0) {
-                perror("Errore setsockopt TCP_USER_TIMEOUT");
-            }
-        }
-#endif
-        {
-            struct timeval tv;
-            tv.tv_sec = 15;
-            tv.tv_usec = 0;
-            // evita blocchi infiniti su recv() se il client smette di rispondere
-            if (setsockopt(dati_client->socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) { 
-                perror("Errore setsockopt SO_RCVTIMEO");
-            }
-        }
-
+        configura_socket_client(dati_client->socket);
         atomic_init(&dati_client->id_partita_corrente, 0);
 
         pthread_t thread_id;

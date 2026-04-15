@@ -86,7 +86,13 @@ typedef struct {
     int escludi2;
 } BroadcastPartitaTerminata;
 
-static int invia_con_fallback(int socket, const char* messaggio, int* socket_ko);
+static int invia_con_fallback(int socket, const char* messaggio, int* socket_ko) {
+    if (*socket_ko < 0 && invia_messaggio(socket, messaggio) < 0) {
+        *socket_ko = socket;
+        return -1;
+    }
+    return 0;
+}
 
 static void accoda_notifica_disconnessione(NotificaDisconnessione* notifiche,
                                            int* count,
@@ -216,12 +222,21 @@ static int termina_partita_per_socket_non_raggiungibile(Partita* partita, int so
     return avversario;
 }
 
-static int invia_con_fallback(int socket, const char* messaggio, int* socket_ko) {
-    if (*socket_ko < 0 && invia_messaggio(socket, messaggio) < 0) {
-        *socket_ko = socket;
-        return -1;
+static void gestisci_socket_ko_partita(int id_partita, int socket_ko, DatiClient* client, int reset_client_sempre) {
+    int socket_avversario = -1;
+
+    blocca_partite();
+    Partita* partita_ko = trova_partita(id_partita);
+    if (partita_ko != NULL && partita_ko->stato == PARTITA_IN_CORSO) {
+        socket_avversario = termina_partita_per_socket_non_raggiungibile(partita_ko, socket_ko);
     }
-    return 0;
+    if (reset_client_sempre || socket_ko == client->socket) {
+        atomic_store(&client->id_partita_corrente, 0);
+    }
+    sblocca_partite();
+
+    notifica_vittoria_tavolino(socket_avversario);
+    broadcast_partita_conclusa(id_partita, socket_ko, socket_avversario);
 }
 
 static void* gestisci_timeout_richiesta(void* arg) {
@@ -470,18 +485,7 @@ static int gestisci_comando_accetta(DatiClient* client, const char* buffer) {
             invia_griglia_con_fallback(sock_g1, sock_g2, griglia, &socket_ko);
 
             if (socket_ko > 0) {
-                int socket_avversario = -1;
-                blocca_partite();
-                Partita* partita_ko = trova_partita(id_partita);
-                if (partita_ko != NULL && partita_ko->stato == PARTITA_IN_CORSO) {
-                    socket_avversario = termina_partita_per_socket_non_raggiungibile(partita_ko, socket_ko);
-                }
-                if (socket_ko == client->socket) {
-                    atomic_store(&client->id_partita_corrente, 0);
-                }
-                sblocca_partite();
-                notifica_vittoria_tavolino(socket_avversario);
-                broadcast_partita_conclusa(id_partita, socket_ko, socket_avversario);
+                gestisci_socket_ko_partita(id_partita, socket_ko, client, 0);
                 return 0;
             }
 
@@ -657,17 +661,7 @@ static int gestisci_mossa_gioco(DatiClient* client, const char* buffer) {
     invia_griglia_con_fallback(socket_me, socket_opp, griglia, &socket_ko);
 
     if (socket_ko > 0) {
-        int socket_avversario = -1;
-        blocca_partite();
-        Partita* partita_ko = trova_partita(id_partita);
-        if (partita_ko != NULL && partita_ko->stato == PARTITA_IN_CORSO) {
-            socket_avversario = termina_partita_per_socket_non_raggiungibile(partita_ko, socket_ko);
-        }
-        atomic_store(&client->id_partita_corrente, 0);
-        sblocca_partite();
-
-        notifica_vittoria_tavolino(socket_avversario);
-        broadcast_partita_conclusa(id_partita, socket_ko, socket_avversario);
+        gestisci_socket_ko_partita(id_partita, socket_ko, client, 1);
     }
 
     return 0;

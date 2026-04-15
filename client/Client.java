@@ -28,6 +28,16 @@ public class Client {
     public Client() {
         scanner = new Scanner(System.in);
     }
+
+    private boolean connessioneAttiva() {
+        return socket != null && !socket.isClosed();
+    }
+
+    private void inviaComando(String comando) {
+        if (out != null) {
+            out.println(comando);
+        }
+    }
     
     public void connetti() {
         try {
@@ -79,9 +89,9 @@ public class Client {
 
     private void inviaDisconnessioneVolontaria() {
         try {
+            inviaComando("ABBANDONA");
+            inviaComando("ESCI");
             if (out != null) {
-                out.println("ABBANDONA");
-                out.println("ESCI");
                 out.flush();
             }
         } catch (Exception ignored) {
@@ -103,7 +113,7 @@ public class Client {
                     gestisciMessaggioServer(messaggio);
                 }
             } catch (IOException e) {
-                if (!socket.isClosed()) {
+                if (connessioneAttiva()) {
                     System.err.println("\nConnessione persa.");
                 }
             }
@@ -118,11 +128,11 @@ public class Client {
             } catch (InterruptedException e) {
                 return;
             }
-            while (socket != null && !socket.isClosed()) {
+            while (connessioneAttiva()) {
                 try {
                     Thread.sleep(5000);
-                    if (socket != null && !socket.isClosed() && out != null) {
-                        out.println("PING");
+                    if (connessioneAttiva() && out != null) {
+                        inviaComando("PING");
                     }
                 } catch (InterruptedException e) {
                     break;
@@ -220,17 +230,17 @@ public class Client {
                 }
 
                 if (comando.equalsIgnoreCase("ABBANDONA")) {
-                    out.println("ABBANDONA");
+                    inviaComando("ABBANDONA");
                     continue;
                 }
                 
                 if (comando.equalsIgnoreCase("ESCI")) {
-                    out.println("ESCI");
+                    inviaComando("ESCI");
                     Thread.sleep(200);
                     break;
                 }
                 
-                out.println(comando);
+                inviaComando(comando);
             }
             
         } catch (InterruptedException e) {

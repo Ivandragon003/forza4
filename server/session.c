@@ -19,6 +19,23 @@ static const char* MENU_COMANDI =
     "ABBANDONA - Ti arrendi nella partita corrente ma resti connesso\n"
     "ESCI - Esci dal gioco (solo quando non sei in partita)\n";
 
+static void aggiorna_entry_client_per_socket(int socket, DatiClient* client) {
+    if (socket >= 0 && socket < MAX_SOCKET_TRACCIATI) {
+        atomic_store(&client_per_socket[socket], client);
+    }
+}
+
+static void chiudi_e_libera_client(DatiClient* client) {
+    if (client == NULL) {
+        return;
+    }
+    aggiorna_entry_client_per_socket(client->socket, NULL);
+    if (client->socket >= 0) {
+        close(client->socket);
+    }
+    free(client);
+}
+
 DatiClient* trova_client_attivo_per_socket(int socket) {
     if (socket < 0 || socket >= MAX_SOCKET_TRACCIATI) {
         return NULL;
@@ -37,9 +54,7 @@ void* gestisci_client(void* arg) {
     DatiClient* client = (DatiClient*)arg;
     char buffer[DIM_BUFFER];
 
-    if (client->socket >= 0 && client->socket < MAX_SOCKET_TRACCIATI) {
-        atomic_store(&client_per_socket[client->socket], client);
-    }
+    aggiorna_entry_client_per_socket(client->socket, client);
 
     printf("Client connesso (socket: %d)\n", client->socket);
 
@@ -47,11 +62,7 @@ void* gestisci_client(void* arg) {
     invia_messaggio(client->socket, "Inserisci il tuo nome:\n");
 
     if (ricevi_messaggio(client->socket, buffer) <= 0) {
-        if (client->socket >= 0 && client->socket < MAX_SOCKET_TRACCIATI) {
-            atomic_store(&client_per_socket[client->socket], NULL);
-        }
-        close(client->socket);
-        free(client);
+        chiudi_e_libera_client(client);
         return NULL;
     }
     snprintf(client->nome, sizeof(client->nome), "%.49s", buffer); // copia il nome del client limitando la lunghezza per evitare overflow del buffer
@@ -89,10 +100,6 @@ void* gestisci_client(void* arg) {
     gestisci_disconnessione_client(client);
 
     printf("Client %s disconnesso\n", client->nome);
-    if (client->socket >= 0 && client->socket < MAX_SOCKET_TRACCIATI) {
-        atomic_store(&client_per_socket[client->socket], NULL);
-    }
-    close(client->socket);
-    free(client);
+    chiudi_e_libera_client(client);
     return NULL;
 }
