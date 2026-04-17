@@ -16,7 +16,7 @@ int invia_messaggio(int socket, const char* messaggio) {
     while (tot_inviati < len) {
         ssize_t inviati = send(socket, messaggio + tot_inviati, len - tot_inviati, 0);
         if (inviati < 0) {
-            if (errno == EINTR) {
+            if (errno == EINTR) {   //chiamata interrotta da un segnale, non è un vero error
                 continue;
             }
             return -1;
@@ -36,7 +36,7 @@ int ricevi_messaggio(int socket, char* buffer) {
 
     size_t pos = 0;
     int overflow = 0;
-    memset(buffer, 0, DIM_BUFFER);
+    memset(buffer, 0, DIM_BUFFER);  //azzera tutto il buffer prima di usarlo: riempie ogni byte con 0
 
     while (1) {
         char c;
@@ -47,24 +47,25 @@ int ricevi_messaggio(int socket, char* buffer) {
             }
             return -1;
         }
-        if (bytes == 0) {
+        if (bytes == 0) {   //client disconnesso
             return 0; 
         }
 
-        if (c == '\r') {
+        if (c == '\r') {    //ignora il ritorno a capo
             continue;
         }
-        if (c == '\n') {
+        if (c == '\n') {    //fine messaggio -> esci dal loop
             break;
         }
 
         if (!overflow && pos < (size_t)(DIM_BUFFER - 1)) {
-            buffer[pos++] = c;
+            buffer[pos] = c;
+            pos = pos + 1;
         } else {
             overflow = 1;
         }
     }
 
-    buffer[pos] = '\0';
-    return (int)pos;
+    buffer[pos] = '\0'; //terminatore di stringa
+    return (int)pos;    //numero di byte letti
 }
