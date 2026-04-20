@@ -15,16 +15,19 @@ public class Client {
     private static final String BLUE = "\033[36m";
     private static final String CYAN = "\033[96m";
     private static final String BOLD = "\033[1m";
-    
+    /*sequenze di caratteri speciali che i terminali interpretano come comandi di colore. 
+    \033 è il carattere ESC in ottale. RESET riporta il colore al default dopo ogni messaggio colorato.
+     */
     private Socket socket;
     private BufferedReader in;
     private PrintWriter out;
     private Scanner scanner;
     private Thread listenerThread;
     private Thread pingThread;
-    private volatile boolean chiusuraStampata = false;
+    private volatile boolean chiusuraStampata = false;  
     private volatile boolean pingAvviato = false;
-    
+    //garantisce che quando un thread scrive questa variabile, tutti gli altri thread vedano subito il nuovo valore
+
     public Client() {
         scanner = new Scanner(System.in);
     }
@@ -41,9 +44,9 @@ public class Client {
     
     public void connetti() {
         try {
-            socket = new Socket(SERVER_HOST, SERVER_PORT);
-            in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            out = new PrintWriter(socket.getOutputStream(), true);
+            socket = new Socket(SERVER_HOST, SERVER_PORT); //apre la connessione TCP verso il server
+            in = new BufferedReader(new InputStreamReader(socket.getInputStream())); //per leggere righe dal server (readLine)
+            out = new PrintWriter(socket.getOutputStream(), true);  //autoflush - ogni println() manda subito i dati ssenza aspttaare che il buffer si riempia
             
             System.out.println(BLUE + "Connesso al server!" + RESET);
             completaHandshakeNome();
@@ -250,7 +253,7 @@ public class Client {
         }
     }
     
-    private void chiudiConnessione() {
+    private void chiudiConnessione() { // fa terminare correttamente tutti i thread e rilascia le risorse prima di uscire
         try {
             if (listenerThread != null) {
                 listenerThread.interrupt();
