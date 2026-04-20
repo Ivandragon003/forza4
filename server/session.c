@@ -19,7 +19,7 @@ static const char* MENU_COMANDI =
     "ABBANDONA - Ti arrendi nella partita corrente ma resti connesso\n"
     "ESCI - Esci dal gioco (solo quando non sei in partita)\n";
 
-static void aggiorna_entry_client_per_socket(int socket, DatiClient* client) {  //scrive un puntatore in una cella dell'array globale
+static void aggiorna_entry_client_per_socket(int socket, DatiClient* client) {
     if (socket >= 0 && socket < MAX_SOCKET_TRACCIATI) {
         atomic_store(&client_per_socket[socket], client);
     }
@@ -29,21 +29,21 @@ static void chiudi_e_libera_client(DatiClient* client) {
     if (client == NULL) {
         return;
     }
-    aggiorna_entry_client_per_socket(client->socket, NULL); //rimuove il client dall'array globale: imposta client_per_socket[fd] = NULL
-    if (client->socket >= 0) { //chiude la socket: libera il file descriptor nele sistema operativo
-        close(client->socket); 
+    aggiorna_entry_client_per_socket(client->socket, NULL);
+    if (client->socket >= 0) {
+        close(client->socket);
     }
-    free(client);//libera la memoria: il free che bilancia il malloc del main
+    free(client);
 }
 
-DatiClient* trova_client_attivo_per_socket(int socket) {    //lettura atomica dell'array
+DatiClient* trova_client_attivo_per_socket(int socket) {
     if (socket < 0 || socket >= MAX_SOCKET_TRACCIATI) {
         return NULL;
     }
     return atomic_load(&client_per_socket[socket]);
 }
 
-void aggiorna_id_partita_client_per_socket(int socket, int id_partita) {    //cerca il client e aggiorna atomicamente il suo id_partita_corrente
+void aggiorna_id_partita_client_per_socket(int socket, int id_partita) {
     DatiClient* client = trova_client_attivo_per_socket(socket);
     if (client != NULL) {
         atomic_store(&client->id_partita_corrente, id_partita);
@@ -51,8 +51,8 @@ void aggiorna_id_partita_client_per_socket(int socket, int id_partita) {    //ce
 }
 
 void* gestisci_client(void* arg) {
-    DatiClient* client = (DatiClient*)arg;  //recupera il puntatore originale
-    char buffer[DIM_BUFFER]; //array locale sullo stack del thread
+    DatiClient* client = (DatiClient*)arg;
+    char buffer[DIM_BUFFER];
 
     aggiorna_entry_client_per_socket(client->socket, client);
 
@@ -65,7 +65,7 @@ void* gestisci_client(void* arg) {
         chiudi_e_libera_client(client);
         return NULL;
     }
-    snprintf(client->nome, sizeof(client->nome), "%.49s", buffer); // copia il nome del client limitando la lunghezza per evitare overflow del buffer
+    snprintf(client->nome, sizeof(client->nome), "%.49s", buffer);
 
     char benvenuto[500];
     snprintf(benvenuto, sizeof(benvenuto), "Ciao %s! Comandi disponibili:\n%s", client->nome, MENU_COMANDI);

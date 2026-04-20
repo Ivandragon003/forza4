@@ -11,12 +11,12 @@ int invia_messaggio(int socket, const char* messaggio) {
     }
 
     size_t len = strlen(messaggio);
-    size_t tot_inviati = 0; //byte inviati fino ad ora
+    size_t tot_inviati = 0; 
 
     while (tot_inviati < len) {
         ssize_t inviati = send(socket, messaggio + tot_inviati, len - tot_inviati, 0);
         if (inviati < 0) {
-            if (errno == EINTR) {   //chiamata interrotta da un segnale, non è un vero error
+            if (errno == EINTR) {      //chiamata interrotta da un segnale, non è un vero error
                 continue;
             }
             return -1;
@@ -36,8 +36,7 @@ int ricevi_messaggio(int socket, char* buffer) {
 
     size_t pos = 0;
     int overflow = 0;
-    memset(buffer, 0, DIM_BUFFER);  //azzera tutto il buffer prima di usarlo: riempie ogni byte con 0
-
+    memset(buffer, 0, DIM_BUFFER);
     while (1) {
         char c;
         int bytes = recv(socket, &c, 1, 0);
@@ -66,6 +65,6 @@ int ricevi_messaggio(int socket, char* buffer) {
         }
     }
 
-    buffer[pos] = '\0'; //terminatore di stringa
-    return (int)pos;    //numero di byte letti
+    buffer[pos] = '\0'; 
+    return (int)pos;    
 }
