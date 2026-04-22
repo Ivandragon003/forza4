@@ -270,7 +270,7 @@ public class Client {
         }
     }
 
-    // ── Entry point ───────────────────────────────────────────────────────────
+    
     public static void main(String[] args) {
         Client client = new Client();
         client.connetti();
